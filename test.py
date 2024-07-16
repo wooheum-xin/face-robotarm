@@ -2,19 +2,19 @@ import cv2
 import face_recognition
 import numpy as np
 import time
-from picamera import PiCamera
-from picamera.array import PiRGBArray
+from picamera2 import Picamera2
+from libcamera import controls
 from pymycobot.mycobot import MyCobot
 
-# PiCamera 초기화
-camera = PiCamera()
-camera.resolution = (640, 480)
-camera.framerate = 32
-raw_capture = PiRGBArray(camera, size=(640, 480))
-mycobot = MyCobot("/dev/cu.usbserial-533B0235061")
+# Picamera2 초기화
+picam2 = Picamera2()
+config = picam2.create_preview_configuration(main={"format": 'XRGB8888', "size": (640, 480)})
+picam2.configure(config)
+picam2.start()
+mycobot=MyCobot("/dev/ttyACM0")
 
-# 카메라 워밍업
-time.sleep(2)
+# 자동 화이트밸런스 및 자동 노출 설정
+picam2.set_controls({"AwbEnable": True, "AeEnable": True})
 
 # 샘플 사진을 로드하고 인식 방법을 학습
 known_image = face_recognition.load_image_file("wooheum.jpg")
@@ -22,14 +22,13 @@ known_face_encoding = face_recognition.face_encodings(known_image)[0]
 
 # 알려진 얼굴 인코딩과 그들의 이름으로 배열 생성
 known_face_encodings = [known_face_encoding]
-known_face_names = ["Wooheum"]
+known_face_names = ["wooheum"]
 
 # 프레임 처리 간격 설정 (초)
 frame_interval = 0.1
 previous_time = time.time()
 
-# 카메라에서 프레임 캡처
-for frame in camera.capture_continuous(raw_capture, format="bgr", use_video_port=True):
+while True:
     # 현재 시간 확인
     current_time = time.time()
 
@@ -37,11 +36,14 @@ for frame in camera.capture_continuous(raw_capture, format="bgr", use_video_port
     if current_time - previous_time >= frame_interval:
         previous_time = current_time
 
-        # 이미지를 numpy 배열로 가져오기
-        image = frame.array
+        # 이미지 캡처
+        image = picam2.capture_array()
+
+        # RGB로 변환 (face_recognition은 RGB 형식을 사용)
+        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGRA2RGB)
 
         # 프레임 크기를 절반으로 줄임 (추가적인 성능 향상을 위해)
-        small_frame = cv2.resize(image, (0, 0), fx=0.5, fy=0.5)
+        small_frame = cv2.resize(rgb_image, (0, 0), fx=0.5, fy=0.5)
 
         # 현재 프레임에서 모든 얼굴 위치 찾기
         face_locations = face_recognition.face_locations(small_frame, model="hog")
@@ -63,9 +65,9 @@ for frame in camera.capture_continuous(raw_capture, format="bgr", use_video_port
 
             if similarity > 60:  # 60% 이상의 유사도를 가질 때 일치로 간주
                 name = known_face_names[best_match_index]
-                mycobot.send_angles([0,30,0,0,0,0], 80)
+                mycobot.send_angle([0, 0, 30, 0, 0, 0], 50)
                 time.sleep(5)
-                mycobot.send_angles([0,0,0,0,0,0], 80)
+                mycobot.send_angle([0, 0, 0, 0, 0, 0], 50)
             else:
                 name = "Unknown"
 
@@ -79,12 +81,10 @@ for frame in camera.capture_continuous(raw_capture, format="bgr", use_video_port
         # 결과 프레임 표시
         cv2.imshow('Video', image)
 
-    # 다음 프레임을 위해 스트림 정리
-    raw_capture.truncate(0)
-
     # 키보드에서 'q'를 누르면 종료
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
 # 창 닫기
 cv2.destroyAllWindows()
+picam2.stop()
